@@ -29,6 +29,7 @@ class PlatformConnection:
     def disconnect(self):
         if self.sock:
             self.sock.close()
+            self.sock = None
             logging.info(f"Disconnected from {self.host}:{self.port}")
 
     def send_command(self, command_type, params=None):
@@ -41,25 +42,15 @@ class PlatformConnection:
             logging.error(f"Error sending command: {e}")
             return {"status": "error", "message": str(e)}
 
-@dataclass
-class PlatformConfig:
-    name: str
-    host: str
-    port: int
-
-PLATFORM_CONNECTIONS: Dict[str, PlatformConnection] = {
-    "blender": PlatformConnection("localhost", 9876),
-    "unreal": PlatformConnection("localhost", 7777),
-    "unity": PlatformConnection("localhost", 8888),
-}
+# Load platform connections from external JSON or environment (placeholder)
+PLATFORM_CONNECTIONS: Dict[str, PlatformConnection] = {}
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     try:
-        for name, connection in PLATFORM_CONNECTIONS.items():
-            connection_status = connection.connect()
-            if not connection_status:
-                logging.warning(f"Unable to connect to {name} at startup")
+        for platform, conn in PLATFORM_CONNECTIONS.items():
+            if not conn.connect():
+                logging.warning(f"Could not connect to {platform} at startup")
         yield {}
     finally:
         for conn in PLATFORM_CONNECTIONS.values():
@@ -67,15 +58,15 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 mcp = FastMCP(
     "MultiPlatformMCP",
-    description="Integration for Blender, Unreal, Unity via Model Context Protocol",
+    description="Integration with various 3D platforms via Model Context Protocol",
     lifespan=server_lifespan
 )
 
 def get_platform_connection(platform_name: str):
-    conn = PLATFORM_CONNECTIONS.get(platform_name.lower())
-    if conn and conn.connect():
-        return conn
-    raise ValueError(f"No connection available for platform '{platform_name}'")
+    conn = PLATFORM_CONNECTIONS.get(platform_name)
+    if conn is None or not conn.connect():
+        raise ConnectionError(f"Unable to connect to {platform_name}")
+    return conn
 
 @mcp.tool()
 def get_platform_info(ctx: Context, platform: str) -> Dict[str, Any]:
@@ -94,7 +85,14 @@ def create_object(ctx: Context, platform: str, object_type: str, location: list 
 def modify_object(ctx: Context, platform: str, object_name: str, properties: Dict[str, Any]):
     """Modify properties of an existing object on the specified platform."""
     conn = get_platform_connection(platform)
-    return conn.send_command("modify_object", {"name": object_name, "properties": properties})
+    params = {"name": object_name, **properties}
+    return conn.send_command("modify_object", params)
+
+@mcp.tool()
+def delete_object(ctx: Context, platform: str, object_name: str):
+    """Delete an object from the specified platform."""
+    conn = get_platform_connection(platform)
+    return conn.send_command("delete_object", {"name": object_name})
 
 def main():
     mcp.run()
